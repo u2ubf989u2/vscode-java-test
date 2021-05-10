@@ -11,78 +11,86 @@ import { resolveJUnitLaunchArguments } from './commandUtils';
 import { randomSequence } from './configUtils';
 
 export async function resolveLaunchConfigurationForRunner(runner: BaseRunner, runnerContext: IRunnerContext, config?: IExecutionConfig): Promise<DebugConfiguration> {
+    let resolvedArguments: IJUnitLaunchArguments;
     if (runnerContext.kind === TestKind.TestNG) {
-        const testNGArguments: IJUnitLaunchArguments = await getTestNGLaunchArguments(runnerContext.projectName);
-
-        let env: {} = {};
-        if (config && config.env) {
-            env = config.env;
-        }
-
-        if (config && config.vmArgs) {
-            testNGArguments.vmArguments.push(...config.vmArgs.filter(Boolean));
-        } else if (config && config.vmargs) {
-            testNGArguments.vmArguments.push(...config.vmargs.filter(Boolean));
-        }
-
-        const moreEntries: {[key: string]: any} = {};
-        if (config && config.sourcePaths) {
-            moreEntries['sourcePaths'] = config.sourcePaths;
-        }
-
-        return {
-            name: `Launch Java Tests - ${randomSequence()}`,
-            type: 'java',
-            request: 'launch',
-            mainClass: runner.runnerMainClassName,
-            projectName: runnerContext.projectName,
-            cwd: config && config.workingDirectory ? config.workingDirectory : testNGArguments.workingDirectory,
-            classPaths: [...testNGArguments.classpath, await runner.runnerJarFilePath, await runner.runnerLibPath],
-            modulePaths: testNGArguments.modulepath,
-            args: runner.getApplicationArgs(config),
-            vmArgs: testNGArguments.vmArguments,
-            env,
-            noDebug: !runnerContext.isDebug,
-            ...moreEntries,
-        };
+        resolvedArguments = await getTestNGLaunchArguments(runnerContext.projectName);
+    } else {
+        resolvedArguments = await getJUnitLaunchArguments(runnerContext);
     }
 
-    return await getDebugConfigurationForEclipseRunner(runnerContext, config);
-}
-
-export async function getDebugConfigurationForEclipseRunner(runnerContext: IRunnerContext, config?: IExecutionConfig): Promise<DebugConfiguration> {
-    const junitLaunchArgs: IJUnitLaunchArguments = await getJUnitLaunchArguments(runnerContext);
-
-    if (config && config.vmArgs) {
-        junitLaunchArgs.vmArguments.push(...config.vmArgs.filter(Boolean));
-    } else if (config && config.vmargs) {
-        junitLaunchArgs.vmArguments.push(...config.vmargs.filter(Boolean));
-    }
-    let env: {} = {};
-    if (config && config.env) {
-        env = config.env;
-    }
-
-    const moreEntries: {[key: string]: any} = {};
-    if (config && config.sourcePaths) {
-        moreEntries['sourcePaths'] = config.sourcePaths;
-    }
-
-    return {
+    let launchConfig: DebugConfiguration = {
         name: `Launch Java Tests - ${randomSequence()}`,
         type: 'java',
         request: 'launch',
-        mainClass: junitLaunchArgs.mainClass,
-        projectName: junitLaunchArgs.projectName,
-        cwd: config && config.workingDirectory ? config.workingDirectory : junitLaunchArgs.workingDirectory,
-        classPaths: junitLaunchArgs.classpath,
-        modulePaths: junitLaunchArgs.modulepath,
-        args: junitLaunchArgs.programArguments,
-        vmArgs: junitLaunchArgs.vmArguments,
-        env,
-        noDebug: !runnerContext.isDebug,
-        ...moreEntries,
+        projectName: resolvedArguments.projectName,
     };
+
+    // parse the main class
+    if (runnerContext.kind === TestKind.TestNG) {
+        launchConfig.mainClass = runner.runnerMainClassName;
+    } else {
+        launchConfig.mainClass = resolvedArguments.mainClass;
+    }
+
+    // parse the cwd
+    if (config?.workingDirectory) {
+        launchConfig.cwd = config.workingDirectory;
+    } else if (config?.cwd) {
+        launchConfig.cwd = config.cwd;
+    } else {
+        launchConfig.cwd = resolvedArguments.workingDirectory;
+    }
+
+    // parse the classpath
+    launchConfig.classPaths = [];
+    if (config?.classPaths) {
+        launchConfig.classPaths.push(...config.classPaths);
+    }
+    launchConfig.classPaths.push(...resolvedArguments.classpath);
+    if (runnerContext.kind === TestKind.TestNG) {
+        launchConfig.classPaths.push(await runner.runnerJarFilePath, await runner.runnerLibPath);
+    }
+
+    // parse the modulePaths
+    launchConfig.modulePaths = [];
+    // module path cannot be duplicated: http://openjdk.java.net/jeps/261
+    if (config?.modulePaths) {
+        launchConfig.modulePaths = config.modulePaths;
+    } else {
+        launchConfig.modulePaths = resolvedArguments.modulepath;
+    }
+
+    // parse args
+    if (runnerContext.kind === TestKind.TestNG) {
+        launchConfig.args = runner.getApplicationArgs(config);
+    } else {
+        launchConfig.args = resolvedArguments.programArguments;
+    }
+
+    // parse vmArgs
+    launchConfig.vmArgs = resolvedArguments.vmArguments;
+    if (config?.vmArgs) {
+        launchConfig.vmArgs.push(...config.vmArgs.filter(Boolean));
+    } else if (config?.vmargs) {
+        launchConfig.vmArgs.push(...config.vmargs.filter(Boolean));
+    }
+
+    // parse remaining entries
+    if (config) {
+        const parsedKeys: string[] = ['name', 'type', 'request', 'projectName', 'mainClass', 'cwd',
+                'workingDirectory', 'classPaths', 'modulePaths', 'args', 'vmargs', 'vmArgs'];
+        const remainingEntries: {[key: string]: any} = Object.keys(config)
+            .filter((key: string) => !parsedKeys.includes(key))
+            .reduce((obj: any, key: string) => {
+                obj[key] = config[key];
+                return obj;
+            }, {});
+        launchConfig = Object.assign(launchConfig, remainingEntries);
+    }
+
+    launchConfig.noDebug = !runnerContext.isDebug;
+
+    return launchConfig;
 }
 
 async function getJUnitLaunchArguments(runnerContext: IRunnerContext): Promise<IJUnitLaunchArguments> {

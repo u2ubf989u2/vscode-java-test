@@ -12,6 +12,7 @@ export interface IExecutionConfig {
     vmArgs?: any[];
     env?: { [key: string]: string; };
     sourcePaths?: string[];
+    [key: string]: any;
 }
 
 export interface IExecutionConfigGroup {
